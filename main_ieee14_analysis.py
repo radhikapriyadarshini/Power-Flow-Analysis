@@ -57,7 +57,7 @@ class IEEE14PowerFlowAnalysis:
         
         # Initialize system components
         print("Initializing IEEE 14-Bus Power Flow Analysis System...")
-        self.system = IEEE14BusSystem()
+        self.system = IEEE14bus()
         self.solver = PowerFlowSolver(tolerance=tolerance, max_iterations=max_iterations)
         
         print(f"✓ System loaded: {self.system.system_name}")
