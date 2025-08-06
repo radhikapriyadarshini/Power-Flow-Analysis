@@ -1,85 +1,95 @@
-#!/usr/bin/env python3
 """
-IEEE Standard System Power Flow Analysis
-Main program to run power flow on IEEE test systems
+Simple IEEE Power Flow Analysis using pandapower
 """
 
-from PowerFlowSolver import PowerFlowSolver
-import sys
+from solve_power_flow import PowerFlowSolver
+import pandas as pd
+import numpy as np
 
-# Available IEEE test systems
-IEEE_SYSTEMS = {
-    '9': 'IEEE 9-bus system',
-    '14': 'IEEE 14-bus system', 
-    '30': 'IEEE 30-bus system',
-    '57': 'IEEE 57-bus system',
-    '118': 'IEEE 118-bus system'
-}
+try:
+    import pandapower.networks as pn
+    SYSTEMS = {
+        '4': pn.case4gs,
+        '5': pn.case5, 
+        '9': pn.case9,
+        '14': pn.case14,
+        '30': pn.case30,
+        '57': pn.case57,
+        '118': pn.case118
+    }
+except ImportError:
+    print("Install pandapower: pip install pandapower")
+    exit()
 
-def display_menu():
-    """Display available IEEE test systems"""
-    print("\n" + "="*50)
-    print("IEEE Standard System Power Flow Analysis")
-    print("="*50)
-    print("Available systems:")
-    for key, description in IEEE_SYSTEMS.items():
-        print(f"  {key}: {description}")
-    print("  q: Quit")
-    print("-"*50)
-
-def get_user_choice():
-    """Get and validate user input"""
-    while True:
-        choice = input("Select system (9/14/30/57/118) or 'q' to quit: ").strip().lower()
-        
-        if choice == 'q':
-            return None
-        elif choice in IEEE_SYSTEMS:
-            return choice
-        else:
-            print("Invalid choice! Please select from available options.")
-
-def run_power_flow(system_choice):
-    """Run power flow for selected IEEE system"""
-    try:
-        print(f"\nRunning power flow for {IEEE_SYSTEMS[system_choice]}...")
-        
-        # Initialize solver with selected system
-        solver = PowerFlowSolver(ieee_system=int(system_choice))
-        
-        # Run power flow
-        results = solver.run_power_flow()
-        
-        print(f"✓ Power flow completed successfully!")
-        print(f"✓ System: {IEEE_SYSTEMS[system_choice]}")
-        
-        return results
-        
-    except Exception as e:
-        print(f"✗ Error running power flow: {str(e)}")
-        return None
+def pandapower_to_dataframes(net):
+    """Convert pandapower network to our format"""
+    # Bus data
+    bus_data = pd.DataFrame({
+        'Bus': net.bus.index + 1,
+        'Type': 1,  # Default PQ
+        'Pd': 0.0,
+        'Qd': 0.0, 
+        'Vm': 1.0,
+        'Va': 0.0
+    })
+    
+    # Set slack buses
+    if len(net.ext_grid) > 0:
+        slack_buses = net.ext_grid['bus'].values + 1
+        bus_data.loc[bus_data['Bus'].isin(slack_buses), 'Type'] = 3
+        bus_data.loc[bus_data['Bus'].isin(slack_buses), 'Vm'] = 1.0
+    
+    # Set PV buses
+    if len(net.gen) > 0:
+        pv_buses = net.gen['bus'].values + 1
+        bus_data.loc[bus_data['Bus'].isin(pv_buses), 'Type'] = 2
+    
+    # Set loads
+    if len(net.load) > 0:
+        for _, load in net.load.iterrows():
+            bus_idx = load['bus'] + 1
+            bus_data.loc[bus_data['Bus'] == bus_idx, 'Pd'] = load['p_mw']
+            bus_data.loc[bus_data['Bus'] == bus_idx, 'Qd'] = load['q_mvar']
+    
+    # Line data
+    line_data = pd.DataFrame({
+        'From': net.line['from_bus'] + 1,
+        'To': net.line['to_bus'] + 1,
+        'R': net.line['r_ohm_per_km'] * net.line['length_km'] / 100,  # Approximate p.u.
+        'X': net.line['x_ohm_per_km'] * net.line['length_km'] / 100,
+        'B': net.line['c_nf_per_km'] * net.line['length_km'] * 1e-6   # Approximate p.u.
+    })
+    
+    return bus_data, line_data
 
 def main():
-    """Main program execution"""
-    print("Starting IEEE Power Flow Analysis Tool...")
+    """Main function"""
+    print("IEEE Power Flow Analysis")
+    print("Available systems:", list(SYSTEMS.keys()))
     
-    while True:
-        display_menu()
-        choice = get_user_choice()
-        
-        if choice is None:  # User chose to quit
-            print("\nExiting program. Goodbye!")
-            break
-            
-        # Run power flow for selected system
-        results = run_power_flow(choice)
-        
-        if results is not None:
-            # Ask if user wants to run another system
-            continue_choice = input("\nRun another system? (y/n): ").strip().lower()
-            if continue_choice != 'y':
-                print("\nExiting program. Goodbye!")
-                break
+    choice = input("Select system: ").strip()
+    if choice not in SYSTEMS:
+        print("Invalid choice!")
+        return
+    
+    # Load pandapower network
+    net = SYSTEMS[choice]()
+    print(f"Loaded IEEE {choice}-bus system")
+    
+    # Convert to our format
+    bus_data, line_data = pandapower_to_dataframes(net)
+    
+    # Run power flow
+    solver = PowerFlowSolver()
+    results = solver.solve_power_flow(bus_data, line_data)
+    
+    if results['success']:
+        print(f"✓ Converged in {results['iterations']} iterations")
+        print(f"✓ Max mismatch: {results['max_mismatch']:.2e}")
+        print("\nBus Results:")
+        print(results['bus_results'][['Bus', 'V_mag_pu', 'V_ang_deg']].round(4))
+    else:
+        print("✗ Failed:", results.get('error', 'Unknown error'))
 
 if __name__ == "__main__":
     main()
